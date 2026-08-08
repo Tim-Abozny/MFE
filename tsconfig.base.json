@@ -1,0 +1,12 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",          // Включает поддержку JSX для всех пакетов
+    "strict": true,              // Включает строгую проверку типов
+    "esModuleInterop": true,     // Позволяет импортировать CommonJS модули как ES6 модули
+    "skipLibCheck": true,        // Пропускает проверку типов внутри сторонних библиотек
+    "isolatedModules": true      // Нужно для корректной работы сторонних сборщиков (Babel/SWC)
+  }
+}

@@ -1,0 +1,8 @@
+packages:
+  - "shell"
+  - "orders"
+  - "ds"
+  - "api"
+  - "shipments"
+allowBuilds:
+  esbuild: true

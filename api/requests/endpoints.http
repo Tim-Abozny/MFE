@@ -1,0 +1,40 @@
+### shipments — 201
+POST http://localhost:4000/shipments HTTP/1.1
+content-type: application/json
+
+{
+    "orderId": "42",
+    "carrier": "DHL"
+}
+
+### shipments — 200
+GET  http://localhost:4000/shipments HTTP/1.1
+
+### orders — 200
+GET  http://localhost:4000/orders HTTP/1.1
+
+### orders — Фильтрация только по статусу SHIPPED
+GET http://localhost:4000/orders?status=shipped HTTP/1.1
+
+### orders — Фильтрация только по статусу PENDING
+GET http://localhost:4000/orders?status=pending HTTP/1.1
+
+### orders — Страница 2, размер 5 (без фильтра)
+GET http://localhost:4000/orders?page=2&size=5 HTTP/1.1
+
+### orders — Страница 1, размер 3, только статус PENDING
+GET http://localhost:4000/orders?page=1&size=3&status=pending HTTP/1.1
+
+### Проверка обычной работы (время ответа должно вырасти на 300-600мс)
+GET http://localhost:4000/orders?page=1&size=5 HTTP/1.1
+
+### Проверка принудительной ошибки 401 Unauthorized
+GET http://localhost:4000/orders HTTP/1.1
+x-force-status: 401
+
+### Проверка принудительной ошибки 500 Internal Server Error
+GET http://localhost:4000/shipments HTTP/1.1
+x-force-status: 500
+
+### orders — Запрос 10 000 объектов с фильтрацией и пагинацией
+GET http://localhost:4000/orders?seed=10000&status=shipped&page=2&size=5 HTTP/1.1
