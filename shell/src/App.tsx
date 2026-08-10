@@ -1,6 +1,8 @@
 // shell/src/App.tsx
 import { THEME, getWelcomeMessage } from "@mfe/ds";
 
+const OrdersAppPromise = import("orders/OrdersApp");
+
 export default function App() {
   return (
     <div

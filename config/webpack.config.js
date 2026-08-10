@@ -1,6 +1,7 @@
 const path = require('path');
 const HtmlWebpackPlugin = require('html-webpack-plugin');
 const { merge } = require('webpack-merge');
+const { ModuleFederationPlugin } = require('webpack').container;
 
 /**
  * Единая фабрика конфигурации Webpack
@@ -8,17 +9,23 @@ const { merge } = require('webpack-merge');
  * @param {string} options.appDirectory - Абсолютный путь к папке приложения (__dirname)
  * @param {number} options.port - Порт для сервера разработки
  * @param {string} options.mode - Режим 'development' или 'production'
+ * @param {Object} options.federationConfig - локальные настройки Module Federation пакета
  */
-module.exports = function createWebpackConfig({ appDirectory, port, mode }) {
+module.exports = function createWebpackConfig({ appDirectory, port, mode, federationConfig }) {
   const isProd = mode === 'production';
+
+  const pkg = require(path.resolve(appDirectory, 'package.json'));
+  const dependencies = pkg.dependencies || {};
 
   const commonConfig = {
     mode: mode,
-    entry: path.resolve(appDirectory, 'src/index.tsx'),
+    entry: path.resolve(appDirectory, 'src/index.ts'),
     output: {
       path: path.resolve(appDirectory, 'dist'),
       filename: 'bundle.js',
       clean: true,
+      publicPath: 'auto',
+      uniqueName: federationConfig.name,
     },
     resolve: {
       extensions: ['.tsx', '.ts', '.js'],
@@ -44,6 +51,15 @@ module.exports = function createWebpackConfig({ appDirectory, port, mode }) {
     },
     plugins: [
       new HtmlWebpackPlugin({}),
+      new ModuleFederationPlugin({
+        ...federationConfig,
+        shared: {
+          react: {
+            singleton: true,
+            requiredVersion: dependencies.react,
+          },
+        },
+      }),
     ],
   };
 
@@ -58,6 +74,7 @@ module.exports = function createWebpackConfig({ appDirectory, port, mode }) {
         port: port || 3000,
         open: true,
         hot: true,
+        historyApiFallback: true,
       },
     });
   }
