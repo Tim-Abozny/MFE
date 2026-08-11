@@ -4,3 +4,10 @@ declare module "orders/OrdersApp" {
   const OrdersApp: ComponentType;
   export default OrdersApp;
 }
+
+declare module "shipments/ShipmentsApp" {
+  import type { ComponentType } from "react";
+
+  const ShipmentsApp: ComponentType;
+  export default ShipmentsApp;
+}

@@ -29,6 +29,18 @@ const PORT = 4000;
 const app = express();
 
 app.use(express.json());
+
+app.use((req, res, next) => {
+    res.setHeader("Access-Control-Allow-Origin", "*"); 
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "X-Requested-With, content-type, Authorization, x-force-status");
+    
+    if (req.method === "OPTIONS") {
+        return res.sendStatus(200);
+    }
+    next();
+});
+
 app.use(delayMiddleware);
 app.use(forceStatusMiddleware);
 

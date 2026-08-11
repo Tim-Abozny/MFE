@@ -1,3 +1,7 @@
+import { Routes, Route } from "react-router-dom";
+import OrdersList from "./pages/OrdersList";
+import OrderDetails from "./pages/OrderDetails";
+
 export default function OrdersApp() {
   return (
     <div
@@ -7,8 +11,10 @@ export default function OrdersApp() {
         borderRadius: "8px",
       }}
     >
-      <h1>Orders Microfrontend Component</h1>
-      <p>This easiest component is ready for federation!</p>
+      <Routes>
+        <Route index element={<OrdersList />} />
+        <Route path=":orderId" element={<OrderDetails />} />
+      </Routes>
     </div>
   );
 }

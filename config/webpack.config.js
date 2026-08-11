@@ -55,8 +55,18 @@ module.exports = function createWebpackConfig({ appDirectory, port, mode, federa
         ...federationConfig,
         shared: {
           react: {
+          singleton: true,
+          requiredVersion: dependencies.react,
+          },
+
+          'react-dom': {
             singleton: true,
-            requiredVersion: dependencies.react,
+            requiredVersion: dependencies['react-dom'],
+          },
+          
+          'react-router-dom': {
+            singleton: true,
+            requiredVersion: dependencies['react-router-dom'],
           },
         },
       }),
@@ -72,9 +82,17 @@ module.exports = function createWebpackConfig({ appDirectory, port, mode, federa
       devtool: 'eval-source-map',
       devServer: {
         port: port || 3000,
-        open: true,
+        open: port === 3000,
         hot: true,
         historyApiFallback: true,
+        
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, PATCH, OPTIONS",
+          "Access-Control-Allow-Headers": "X-Requested-With, content-type, Authorization"
+        },
+
+        allowedHosts: 'all',
       },
     });
   }
