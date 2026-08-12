@@ -32,7 +32,7 @@ navigate to /orders
 | 01.4 | Declare the remote module in `.d.ts` | Done — [writeup](#typescript-and-the-remote-contract) |
 | 01.5 | Inspect the built `remoteEntry.js` | Done — [writeup](#what-is-inside-remoteentryjs) |
 | 01.6 | Break `shared` React, reproduce the hook error | Done — [writeup](#experiment-016--two-react-copies) |
-| 01.7 | Mismatched major versions with and without `strictVersion` | **Not performed yet** |
+| 01.7 | Mismatched major versions with and without `strictVersion` | Done — [writeup](#experiment-017--requiredversion-singleton-and-strictversion) |
 | 01.8 | Second remote `shipments`, both lazy | Code done, Network measurement **not recorded yet** |
 | 01.9 | Error Boundary per remote with a working Retry button | **Not implemented yet** |
 | 01.10 | Standalone entry point for each remote | Done |
@@ -667,17 +667,145 @@ failure mode task 01.9 exists to contain.
 extraction introduced for this experiment was kept, because task 01.7 needs to toggle
 `strictVersion` on the same object.
 
-## Experiment: strictVersion
+## Experiment 01.7 — requiredVersion, singleton and strictVersion
 
-> **Not performed yet** — task 01.7.
+### Background: three fields that answer three different questions
 
-Plan: pick a small library genuinely used by both `shell` and `orders` — React itself is a
-bad choice here, different majors bring too many side effects — install a different major
-version in each, call it from both so Webpack keeps it in the runtime, declare it in
-`shared`, then compare `strictVersion: false` against `strictVersion: true`.
+They are constantly confused because all three sound like they are "about versions". They
+are not.
 
-To be recorded: exact versions, the warning text and which version actually won, then the
-error text under `strictVersion`.
+| Field | Answers | Who declares it |
+| --- | --- | --- |
+| `requiredVersion` | "Which versions will satisfy me?" | the consumer |
+| `singleton` | "How many instances may exist at all?" | every participant |
+| `strictVersion` | "What to do when no satisfying version was found?" | the consumer |
+
+`requiredVersion` is a *claim by the consumer*, not a statement of what will actually be
+used. `singleton` is about instance count, not versions — which is why experiment 01.6
+crashed with a single version, `19.2.8`, present twice.
+
+The shared scope stores a **map of versions per package**, not one version:
+
+```js
+__webpack_share_scopes__.default = {
+  "react-router-dom": {
+    "7.18.2": { get: fn, from: "shipments", loaded: false }
+  }
+}
+```
+
+Each container registers its own copies during `init(sharedScope)`. The conflict does not
+happen when copies are stored — it happens when a consumer comes to collect one.
+
+| Situation | Outcome |
+| --- | --- |
+| A satisfying version is on the scope | It is handed over. Console stays silent. |
+| No match, `singleton: false` | The consumer falls back to the copy bundled inside its own build. No warning, no error — just two instances. |
+| No match, `singleton: true`, `strictVersion: false` | Whatever is on the scope is handed over, plus a `console.warn`. Execution continues. |
+| No match, `singleton: true`, `strictVersion: true` | `throw` — the shared module fails to load. |
+
+### Setup
+
+`react-router-dom` was used as the test subject, with the version requirement **simulated
+rather than installed**: `orders` declared a requirement it could not be satisfied with,
+while every package remained on `react-router-dom@7.18.2`.
+
+```js
+// config/webpack.config.js — temporary, orders only
+if (federationConfig.name === 'orders') {
+  sharedConfig['react-router-dom'] = {
+    singleton: <toggled>,
+    requiredVersion: '^6.0.0',
+    strictVersion: <toggled>,
+  };
+}
+```
+
+React itself was deliberately avoided here: mismatched React majors produce the hook crash
+from 01.6, which would mask the version diagnostics, and `react-dom` / `react-router` are
+pinned to React's major, so the experiment would stop having a single variable.
+
+### The three runs
+
+| Run | `singleton` | `strictVersion` | Result |
+| --- | --- | --- | --- |
+| A | `true` | `false` | warning, application keeps working |
+| B | `true` | `true` | `Uncaught Error`, shared module fails to load |
+| C | `false` | — | complete silence, application keeps working |
+
+**Run A — soft mode.** Yellow `console.warn`, rendering unaffected:
+
+```text
+Unsatisfied version 7.18.2 from shipments of shared singleton module react-router-dom
+(required ^6.0.0)
+```
+
+**Run B — strict mode.** Same message, thrown instead of logged:
+
+```text
+Uncaught Error: Unsatisfied version 7.18.2 from shipments of shared singleton module
+react-router-dom (required ^6.0.0)
+```
+
+**Run C — no singleton.** No error and no warning at all. Network showed several
+`react-router-dom` requests, all of them version 7.18.2.
+
+### Why it happened
+
+**Why run C is silent.** This is the least intuitive result and the main takeaway:
+*mismatched versions are not an event by themselves.* Without `singleton`, the consumer is
+free to fall back to the copy bundled in its own build, everyone gets what they asked for,
+and there is nothing to complain about. The system only objects once **we** demand a single
+instance — that forces it to pick one winner, and the loser necessarily receives a version
+it did not request.
+
+**Why run C did not break the router.** The expectation was a context error: if `orders`
+uses its own `react-router-dom`, its `<Routes>` should fail to find the shell's
+`<BrowserRouter>`. It did not, because `react-router` is declared as a *separate* singleton
+and was left untouched. In v7 `react-router-dom` is a thin re-export layer and the contexts
+live in `react-router`:
+
+```text
+orders → own copy of react-router-dom (3.9 KB) ─┐
+                                                 ├─► ONE shared react-router (singleton)
+shell  → own copy of react-router-dom (3.9 KB) ─┘         └── one set of contexts
+```
+
+Measured on the production build: the `react-router-dom` chunk is 3 941 bytes while
+`react-router` is 190 780 bytes. Two copies of the wrapper both delegate into a single
+implementation, so a single router context survives.
+
+Had `react-router` not been added to `shared` earlier in this lab, run C would have taken
+the application down. The experiment retroactively justified that change.
+
+**Why "all of them 7.18.2" is the correct reading of the Network tab.** Only one version was
+ever installed. What differed between the requests was the **copy**, not the version — the
+same distinction that made 01.6 crash.
+
+### Honest limitation of this setup
+
+No second major version was installed; the requirement was simulated. Therefore this
+experiment demonstrates:
+
+- `requiredVersion` is a consumer-side claim, not a fact;
+- `singleton` forces one winner for everybody;
+- `strictVersion` decides whether a mismatch is a warning or a refusal to load.
+
+It does **not** demonstrate how the scope behaves when two genuinely different versions are
+registered in it. Only `7.18.2` was ever on the scope, so the winner was determined
+trivially.
+
+### Side observation: the host is not the provider
+
+Both here and in 01.6 the shared copy was supplied by **`shipments`** — the message reads
+`from shipments`, and in 01.6 the shared React chunk was downloaded from port 3002. The
+provider of a shared module is decided by negotiation between all participating containers.
+Being the host grants no priority.
+
+### Resolution
+
+The temporary `orders` override was removed and `react-router-dom` returned to
+`singleton: true` with `requiredVersion` read from the package's own `dependencies`.
 
 ## Runtime remote configuration
 
