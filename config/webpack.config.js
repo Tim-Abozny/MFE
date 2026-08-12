@@ -18,6 +18,18 @@ module.exports = function createWebpackConfig({ appDirectory, port, mode, federa
   const dependencies = pkg.dependencies || {};
   const publicPathValue = federationConfig.name === 'shell' ? '/' : 'auto';
 
+  const sharedConfig = {
+    react: { singleton: true, requiredVersion: dependencies.react },
+    'react-dom': { singleton: true, requiredVersion: dependencies['react-dom'] },
+    'react-router': { singleton: true, requiredVersion: dependencies['react-router'] },
+    'react-router-dom': { singleton: true, requiredVersion: dependencies['react-router-dom'] },
+  };
+
+  if (federationConfig.name === 'orders') {
+    delete sharedConfig.react;
+    delete sharedConfig['react-dom'];
+  }
+
   const commonConfig = {
     mode: mode,
     entry: path.resolve(appDirectory, 'src/index.ts'),
@@ -58,27 +70,28 @@ module.exports = function createWebpackConfig({ appDirectory, port, mode, federa
       }),
       new ModuleFederationPlugin({
         ...federationConfig,
-        shared: {
-          react: {
-          singleton: true,
-          requiredVersion: dependencies.react,
-          },
+        shared: sharedConfig,
+        // shared: {
+        //   react: {
+        //   singleton: true,
+        //   requiredVersion: dependencies.react,
+        //   },
 
-          'react-dom': {
-            singleton: true,
-            requiredVersion: dependencies['react-dom'],
-          },
+        //   'react-dom': {
+        //     singleton: true,
+        //     requiredVersion: dependencies['react-dom'],
+        //   },
 
-          'react-router-dom': {
-            singleton: true,
-            requiredVersion: dependencies['react-router-dom'],
-          },
+        //   'react-router-dom': {
+        //     singleton: true,
+        //     requiredVersion: dependencies['react-router-dom'],
+        //   },
 
-          'react-router': {
-            singleton: true,
-            requiredVersion: dependencies['react-router'],
-          },
-        },
+        //   'react-router': {
+        //     singleton: true,
+        //     requiredVersion: dependencies['react-router'],
+        //   },
+        // },
       }),
     ],
   };

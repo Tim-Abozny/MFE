@@ -31,7 +31,7 @@ navigate to /orders
 | 01.3 | Reproduce eager consumption error, then fix with bootstrap | Done — [writeup](#experiment-013--synchronous-entry-point) |
 | 01.4 | Declare the remote module in `.d.ts` | Done — [writeup](#typescript-and-the-remote-contract) |
 | 01.5 | Inspect the built `remoteEntry.js` | Done — [writeup](#what-is-inside-remoteentryjs) |
-| 01.6 | Break `shared` React, reproduce the hook error | **Not performed yet** |
+| 01.6 | Break `shared` React, reproduce the hook error | Done — [writeup](#experiment-016--two-react-copies) |
 | 01.7 | Mismatched major versions with and without `strictVersion` | **Not performed yet** |
 | 01.8 | Second remote `shipments`, both lazy | Code done, Network measurement **not recorded yet** |
 | 01.9 | Error Boundary per remote with a working Retry button | **Not implemented yet** |
@@ -493,17 +493,179 @@ Promise even after the remote's server is back up.
 
 ---
 
-## Experiment: two React copies
+## Experiment 01.6 — two React copies
 
-> **Not performed yet** — task 01.6.
+### Background: what a hook actually does
 
-Plan: remove `react` and `react-dom` from the remote's `shared`, so `orders` bundles and
-uses its own copy, add a real hook to `OrdersApp` (without a hook the problem can stay
-invisible), and observe the result **in hosted mode** at `http://localhost:3000/orders`.
-Standalone mode would keep working, because there is only one React on that page.
+The `react` package cannot store state. It is an API surface; the renderer — `react-dom`,
+`react-native`, `react-test-renderer` — owns the implementation. So `useState` inside
+`react` does not contain hook logic, it forwards the call to whichever renderer is
+currently rendering. The pointer to that renderer is a **module-level variable** inside
+the `react` package. In React 19.2.8 it is `ReactSharedInternals.H`, and the forwarding
+looks like this:
 
-To be recorded: the configuration before the break, the exact console text, why a component
-without hooks could still work, and why `singleton` removes the second copy.
+```js
+// node_modules/react/cjs/react.development.js
+function resolveDispatcher() {
+  var dispatcher = ReactSharedInternals.H;
+  null === dispatcher && console.error("Invalid hook call. …");
+  return dispatcher;                                   // returns null, does not throw
+}
+
+exports.useState = function (initialState) {
+  return resolveDispatcher().useState(initialState);   // null.useState → TypeError
+};
+```
+
+`react-dom` fills that variable immediately before calling a component function and clears
+it afterwards. It fills the variable **in the copy of `react` that it imported itself**.
+
+A module-level variable is created when the module executes. Execute the same library code
+twice and there are two independent variables. One version on disk does not mean one copy
+in memory: Webpack inlines the library into each bundle, and when both bundles run in the
+same tab, both copies execute.
+
+### What changed
+
+`react` and `react-dom` were removed from the `shared` block of `orders` only, so the
+remote bundles and uses its own copy instead of negotiating one through the shared scope:
+
+```js
+// config/webpack.config.js — temporary
+if (federationConfig.name === 'orders') {
+  delete sharedConfig.react;
+  delete sharedConfig['react-dom'];
+}
+```
+
+No application code was modified. `orders/src/pages/OrdersList.tsx` already calls real
+hooks (`useState`, `useEffect`), which is what the experiment needs — a component without
+hooks would not expose the problem.
+
+### What was expected
+
+A hook-related failure in hosted mode, and a still-working remote in standalone mode.
+
+### What actually happened
+
+**Build output confirms the split before the browser is even opened.** With the experiment
+applied, `orders` registers only two shared modules instead of four:
+
+```text
+provide shared module (default) react-router-dom@7.18.2
+provide shared module (default) react-router@7.18.2
+consume shared module (default) react-router-dom@^7.18.2 (singleton)
+consume shared module (default) react-router@^7.18.2 (singleton)
+```
+
+`react` and `react-dom` are absent from the list entirely — they are compiled straight into
+the remote.
+
+**In the browser at `http://localhost:3000/orders`, two different errors appeared in
+sequence**, not as alternatives:
+
+```text
+Invalid hook call. Hooks can only be called inside of the body of a function component.
+This could happen for one of the following reasons:
+1. You might have mismatching versions of React and the renderer (such as React DOM)
+2. You might be breaking the Rules of Hooks
+3. You might have more than one copy of React in the same app
+See https://react.dev/link/invalid-hook-call for tips about how to debug and fix this problem.
+    at resolveDispatcher (react.development.js:519)
+    at exports.useState (react.development.js:1264)
+    at OrdersList (OrdersList.tsx:17)
+```
+
+```text
+Uncaught TypeError: Cannot read properties of null (reading 'useState')
+    at exports.useState (react.development.js:1264)
+    at OrdersList (OrdersList.tsx:17)
+```
+
+Followed by React's own suggestion:
+
+```text
+An error occurred in the <OrdersList> component.
+Consider adding an error boundary to your tree to customize error handling behavior.
+```
+
+**Network confirmed two copies were actually downloaded.** The same module, `react/index.js`,
+arrived from two different origins:
+
+```text
+http://localhost:3001/vendors-…_react_index_js.bundle.js            ← the remote's private copy
+http://localhost:3002/vendors-…_react_index_js.bundle.js            ← the shared singleton copy
+http://localhost:3001/vendors-…_react_jsx-dev-runtime_js.bundle.js  ← and its JSX runtime
+```
+
+Two downloads means two module executions, which means two independent
+`ReactSharedInternals.H` variables — the crash, visible in the network log rather than
+inferred from the stack. Because `orders` no longer participates in the shared scope, it
+pulls both `react` and its JSX runtime from its own origin.
+
+Worth noting: the shared copy was served by **`shipments` on port 3002**, not by the host.
+The provider of a shared module is decided by version negotiation between all participating
+containers; the host is one participant among them, not the automatic owner of the shared
+copy.
+
+**Standalone mode kept working.** `http://localhost:3001/` rendered and fetched data
+normally throughout. This is the other half of the experiment: unchanged component code
+crashes when hosted and works when served on its own, so the defect is not in the component
+— it is in how many copies of React are present on the page.
+
+### Why it happened
+
+**Why two messages rather than one.** They are two consecutive steps of a single failure.
+`resolveDispatcher()` reads `ReactSharedInternals.H`, finds `null`, prints the readable
+diagnostic via `console.error` — and then **returns `null` anyway**, because it does not
+throw. Control returns to `exports.useState`, which immediately calls `.useState` on that
+`null` and produces the `TypeError`. The friendly message is a warning; the `TypeError` is
+the actual crash.
+
+**Why the stack is the proof.** The stack names the exact chain described above:
+
+```text
+resolveDispatcher  →  exports.useState  →  OrdersList (OrdersList.tsx:17)
+```
+
+Line 17 of `OrdersList.tsx` is `const [orders, setOrders] = useState<Order[]>([])`, the
+first hook call in the remote.
+
+**Why a component without hooks kept working.** The same stack shows `OrdersApp`
+(`OrdersApp.tsx:15`) rendering `<OrdersList>` successfully before the crash. `OrdersApp`
+contains no hooks — it only returns JSX. A JSX element is a plain object tagged with
+`$$typeof: Symbol.for('react.element')`, and `Symbol.for` reads from a page-wide global
+registry, so the tag produced by one copy of React is literally equal to the tag expected
+by the other. Elements cross the copy boundary; hooks do not, because a hook reads a
+module-level variable that only its own copy owns.
+
+| Crossing the copy boundary | Works | Reason |
+| --- | --- | --- |
+| JSX element | yes | plain object, identified through the global `Symbol.for` registry |
+| Hook | no | reads a module-level variable filled by the other copy's renderer |
+| Context | no | `createContext` produced two distinct key objects |
+
+**Why `singleton` fixes it.** `singleton: true` does not merge two copies — it prevents the
+second one from existing. Federation picks one instance for the shared scope and forces
+every consumer onto it. One instance means one `ReactSharedInternals.H`, so the dispatcher
+written by the renderer is the same one the component reads.
+
+| Configuration | Result |
+| --- | --- |
+| `react` absent from `shared` | Each build ships its own copy. Hook-free components render, components with hooks crash. |
+| `react` shared, `singleton: false` | Multiple versions may coexist if ranges disagree — same crash, but only on some version combinations. |
+| `singleton: true` in the host only | The remote does not participate and still uses its own copy. Every build must declare it. |
+| `singleton: true` everywhere | One instance, hooks work. |
+
+**Side observation.** Without an Error Boundary the crash unmounted the entire tree,
+including the shell navigation — React said as much in the console. This is exactly the
+failure mode task 01.9 exists to contain.
+
+### Resolution
+
+`react` and `react-dom` were restored to `shared` with `singleton: true`. The `sharedConfig`
+extraction introduced for this experiment was kept, because task 01.7 needs to toggle
+`strictVersion` on the same object.
 
 ## Experiment: strictVersion
 
