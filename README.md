@@ -71,8 +71,13 @@ which are part of the exercise rather than accidents.
 | Lab | Topic | Status |
 | --- | --- | --- |
 | [Lab 00](docs/lab-00.md) | Monorepo skeleton, build factory, mock API | Complete |
-| [Lab 01](docs/lab-01.md) | Module Federation: host, two remotes, shared dependencies | In progress |
+| [Lab 01](docs/lab-01.md) | Module Federation: host, two remotes, shared dependencies | Complete (bonus 01.13 not attempted) |
 
-Lab 01 open items are listed in its
-[task status table](docs/lab-01.md#task-status) — error isolation, the two remaining
-breakage experiments, runtime remote configuration, and production static serving.
+Lab 01 covers runtime remote resolution, per-remote error isolation with a Retry that
+genuinely reloads the remote, and three deliberate breakages recorded with their real console
+output: [eager consumption](docs/lab-01.md#experiment-013--synchronous-entry-point),
+[two React copies](docs/lab-01.md#experiment-016--two-react-copies), and
+[version negotiation](docs/lab-01.md#experiment-017--requiredversion-singleton-and-strictversion).
+Everything was re-verified against the production build served statically, which is where a
+[Babel/Webpack mode mismatch](docs/lab-01.md#devprod-divergence-found-during-acceptance)
+surfaced that the dev server had hidden.

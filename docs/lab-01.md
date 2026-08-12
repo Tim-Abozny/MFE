@@ -33,11 +33,11 @@ navigate to /orders
 | 01.5 | Inspect the built `remoteEntry.js` | Done — [writeup](#what-is-inside-remoteentryjs) |
 | 01.6 | Break `shared` React, reproduce the hook error | Done — [writeup](#experiment-016--two-react-copies) |
 | 01.7 | Mismatched major versions with and without `strictVersion` | Done — [writeup](#experiment-017--requiredversion-singleton-and-strictversion) |
-| 01.8 | Second remote `shipments`, both lazy | Code done, Network measurement **not recorded yet** |
-| 01.9 | Error Boundary per remote with a working Retry button | **Not implemented yet** |
+| 01.8 | Second remote `shipments`, both lazy | Done — [measurements](#network-verification-results) |
+| 01.9 | Error Boundary per remote with a working Retry button | Done — [writeup](#error-isolation) |
 | 01.10 | Standalone entry point for each remote | Done |
 | 01.11 | Shell owns the prefix, remote owns inner routes, survives reload | Done |
-| 01.12 | Remote URLs in a runtime config, not baked into the build | **Not implemented yet** |
+| 01.12 | Remote URLs in a runtime config, not baked into the build | Done — [writeup](#runtime-remote-configuration) |
 | 01.13 | Bonus: same host on the Vite MF plugin | Not started |
 
 Sections marked *not performed yet* below contain the plan only. No results are recorded
@@ -117,20 +117,46 @@ from an empty directory.
 
 ## How to serve dist
 
-> **Not verified yet.** Task 01.12 (runtime remote config) changes how the host resolves
-> remote URLs, so production serving is verified after that task, not before. Working
-> dev-server behaviour does not prove that a static `dist` is configured correctly —
-> the two differ in exactly the places this lab is about: `publicPath`, CORS and SPA
-> fallback.
+Each `dist` is served independently, exactly as three separately deployed applications would
+be:
 
-Planned checks once implemented:
+```bash
+npx serve -s shell/dist     -l 3000 --cors
+npx serve -s orders/dist    -l 3001 --cors
+npx serve -s shipments/dist -l 3002 --cors
+pnpm --filter @mfe/api start
+```
 
-- each `dist` served by its own static server on 3000 / 3001 / 3002
-- `remoteEntry.js` reachable at the remote origin
-- remote chunks requested from the remote origin, not the host
-- CORS headers allow the host to load remote assets
-- SPA fallback: `/orders/15` still resolves after a hard reload
-- one build of `shell` works against different runtime configs
+Two flags carry the whole difference from the dev server:
+
+- **`-s`** — serve `index.html` for unknown paths. Without it a reload on `/orders/15` makes
+  the server look for a file at that path and return 404. This replaces
+  `devServer.historyApiFallback`.
+- **`--cors`** — send `Access-Control-Allow-Origin: *`. Without it the host cannot fetch a
+  remote's `remoteEntry.js` from another origin. This replaces the `headers` block of the dev
+  server config.
+
+Both were supplied by `webpack-dev-server` through the shared factory during development.
+Nothing supplies them in production, which is why this is a separate acceptance step.
+
+### Acceptance results
+
+| Check | Result |
+| --- | --- |
+| `localhost:3001/remoteEntry.js` returns JavaScript, not HTML or 404 | pass |
+| remote chunks requested from `:3001` / `:3002`, never from the host | pass |
+| no `blocked by CORS policy` in the console | pass |
+| `/orders` renders the live list | pass |
+| `/orders/:id` renders the details page | pass |
+| hard reload on `/orders/15` still resolves | pass |
+| standalone `localhost:3001/1` + reload | pass |
+| lazy loading — nothing from `:3002` while on `/orders` | pass |
+| stopped remote leaves the shell and its navigation alive | pass |
+| Retry reloads the remote without a page refresh | pass |
+| one build against a changed runtime config | pass |
+
+One defect was found only at this stage and is written up under
+[Dev/prod divergence](#devprod-divergence-found-during-acceptance).
 
 ---
 
@@ -371,7 +397,7 @@ in `node_modules`. It is resolved by Module Federation at runtime, so TypeScript
 told the module will exist:
 
 ```ts
-// shell/src/remotes.d.ts
+// shell/src/remotes.d.ts — as originally written for task 01.4
 declare module "orders/OrdersApp" {
   import type { ComponentType } from "react";
 
@@ -380,8 +406,10 @@ declare module "orders/OrdersApp" {
 }
 ```
 
-The file is inside `shell/tsconfig.json`'s `include`, and `pnpm --filter @mfe/shell typecheck`
-exits 0 — the declaration is actually compiled, not merely present.
+The file sits inside `shell/tsconfig.json`'s `include`, so `pnpm --filter @mfe/shell typecheck`
+compiles it rather than ignoring it. That command is the only thing in this repository that
+runs `tsc` at all: `babel-loader` strips types without checking them, so nothing in the build
+would have caught a broken declaration.
 
 This declaration does not load the remote, does not check that the remote is reachable, does
 not verify that the real component matches, and emits no JavaScript.
@@ -402,6 +430,36 @@ The prop was removed afterwards — it was never used. Both remotes navigate wit
 links (`to=".."`, `to={id}`), which resolve through the router context, and the context
 already knows the mount prefix. Passing the prefix as a prop would have duplicated the
 source of truth.
+
+### Where the contract lives now
+
+Task 01.12 replaced the container-name import with a runtime loader, so nothing imports
+`"orders/OrdersApp"` any more and both `declare module` blocks became dead code. They were
+removed. `shell/src/remotes.d.ts` now declares only what is genuinely missing from
+TypeScript's view of the world — the two Webpack free variables and the runtime config on
+`window`:
+
+```ts
+declare const __webpack_init_sharing__: (scope: string) => Promise<void>;
+declare const __webpack_share_scopes__: { default: unknown };
+
+interface Window {
+  MFE_CONFIG?: Record<string, string>;
+}
+```
+
+Those two identifiers do not exist in source at all — Webpack substitutes implementations at
+build time. That is why the build succeeded while `tsc` reported
+`Cannot find name '__webpack_init_sharing__'`: the two tools disagree about what exists.
+
+The remote contract moved into the loader's return type:
+
+```ts
+loadDynamicRemote(remoteName: string, moduleName: string): () => Promise<{ default: ComponentType }>
+```
+
+The form changed; the underlying problem did not. This is still a hand-written assertion
+about a module that will only exist at runtime, and nothing checks it against the remote.
 
 ---
 
@@ -468,28 +526,130 @@ a symptom that points at static serving, not at Module Federation.
 
 ## Error isolation
 
-> **Not implemented yet** — task 01.9.
-
-Planned structure, one boundary per remote so that a failure in one section cannot hide the
-other or the navigation:
+Each remote is wrapped in its own boundary, inside its own `<Route>`, so a failure in one
+section can hide neither the other section nor the navigation:
 
 ```text
-OrdersRemoteBoundary
-└── Suspense
-    └── OrdersApp
+<Route path="/orders/*">
+  RemoteErrorBoundary sectionName="Orders"
+  └── Suspense fallback="Loading Orders Section…"
+      └── OrdersApp        (React.lazy)
 ```
 
-`Suspense` and an Error Boundary do different jobs: `Suspense` shows a fallback while a
-Promise is pending, an Error Boundary catches a rejected Promise or a render error.
-`Suspense` is not a network error handler.
+`Suspense` and an Error Boundary do different jobs, and both are required:
 
-Each remote already has its own `Suspense` inside its own `<Route>` rather than one shared
-wrapper around the whole shell.
+| Component | Handles |
+| --- | --- |
+| `Suspense` | the waiting state while the import Promise is pending |
+| Error Boundary | a rejected Promise or a render error below it |
 
-The fallback must name the unavailable section, explain the problem, offer a Retry button
-and a way back to the home page. The non-trivial part is Retry: Webpack caches the rejected
-`import()`, so resetting the boundary's state alone will hand `React.lazy` the same rejected
-Promise even after the remote's server is back up.
+`Suspense` is not a network error handler. A remote is a network request and can 404 after a
+bad deploy — without a boundary the whole shell goes blank.
+
+`RemoteErrorBoundary` is a class component because React still has no built-in hook
+equivalent. It implements `getDerivedStateFromError` (switch to the fallback UI) and
+`componentDidCatch` (log with the section name). The fallback names the unavailable section,
+explains the problem, and offers **Retry** plus a link **Home**.
+
+### Why the Retry button is the hard part
+
+The obvious implementation — reset the boundary's state, or remount it with a changing
+`key` — **cannot work**, and the reason is worth stating precisely, because it is four
+separate caches sitting below React.
+
+**Layer 1 — `React.lazy` memoises the rejection.** A `lazy()` object stores its own status:
+
+```js
+{ $$typeof: REACT_LAZY_TYPE, _payload: { _status, _result }, _init }
+```
+
+Once the import Promise rejects, `_status` becomes `Rejected` and every later render does
+`throw payload._result` without ever calling the import function again. If the `lazy` is a
+module-level constant, remounting the boundary hands the new subtree the same poisoned
+object.
+
+**Layer 2 — the container module is cached.** With statically declared remotes Webpack
+generates a module whose `module.exports` *is* the loading Promise:
+
+```js
+/***/ "webpack/container/reference/orders"
+module.exports = new Promise((resolve, reject) => {
+	if(typeof orders !== "undefined") return resolve();
+	__webpack_require__.l("http://localhost:3001/remoteEntry.js", (event) => {
+		__webpack_error__.name = 'ScriptExternalLoadError';
+		reject(__webpack_error__);
+	}, "orders");
+}).then(() => (orders));
+```
+
+It is created once and stored in `__webpack_require__.c`. Requesting it again returns the
+already-rejected Promise — no new `<script>`, no network request at all.
+
+**Layer 3 — the module factory is replaced with a thrower.**
+
+```js
+const onError = (error) => {
+	__webpack_require__.m[id] = () => { throw error; }
+	data.p = 0;
+};
+```
+
+**Layer 4 — shared-scope initialisation is memoised, and it "succeeded".**
+
+```js
+const initExternal = (id) => {
+	const handleError = (err) => (warn("Initialization of sharing external failed: " + err));
+	…
+	catch(err) { handleError(err); }
+}
+…
+return initPromises[name] = Promise.all(promises).then(() => (initPromises[name] = 1));
+```
+
+The failure is only *warned* about, so from the host's point of view the shared scope
+initialised fine, and the result is cached in `initPromises`. Consequence: even after
+defeating layers 1–3, a freshly loaded container would never get `init(shareScope)` called,
+because that only happens inside `__webpack_require__.I`, which is now a no-op.
+
+### How it was actually solved
+
+Layers 2–4 exist only because Webpack owns the loading. Moving to a runtime remote loader
+(task 01.12) removes all three: with `remotes: {}` Webpack never generates a container
+reference module, and `container.init()` is called by application code on every attempt.
+
+That leaves layer 1, fixed by creating a **new** `lazy` per attempt:
+
+```tsx
+const [ordersKey, setOrdersKey] = useState(0);
+
+const OrdersApp = useMemo(
+  () => lazy(loadDynamicRemote("orders", "./OrdersApp")),
+  [ordersKey],
+);
+```
+
+`onRetry` increments the key → new `lazy` → new loader call → new `<script>` → new
+`container.init()`. The loader's own error path already deletes the failed URL from its
+script cache, so nothing stale survives.
+
+The order of the two tasks matters: 01.9 cannot be finished properly before 01.12.
+
+### Verification (production build, static servers)
+
+| Step | Result |
+| --- | --- |
+| `/orders` works, then the orders server is stopped and the page reloaded | fallback shown: *Section "Orders" temporary not available* |
+| shell navigation during the outage | intact and usable |
+| `/shipments` during the orders outage | works normally — failure did not spread |
+| orders server restarted, **Retry** pressed, no page reload | new request to `remoteEntry.js` in Network, section rendered |
+
+The error reaching the boundary is now the loader's own — `Network error while loading
+script: http://localhost:3001/remoteEntry.js` — rather than Webpack's
+`ScriptExternalLoadError`, since Webpack no longer performs the load. `componentDidCatch`
+logs it as `[ErrorBoundary] Error in section Orders:`.
+
+The decisive evidence that Retry genuinely retries is the **new network request** after the
+button is pressed. A re-render alone would produce no traffic.
 
 ---
 
@@ -809,9 +969,9 @@ The temporary `orders` override was removed and `react-router-dom` returned to
 
 ## Runtime remote configuration
 
-> **Not implemented yet** — task 01.12.
+### The problem with build-time URLs
 
-Currently the remote URLs are baked into the host at build time:
+Originally the host resolved remotes at build time:
 
 ```js
 remotes: {
@@ -819,47 +979,209 @@ remotes: {
 }
 ```
 
-That means one `dist` of the shell can only ever talk to one set of remotes, which breaks
-the moment the same artifact has to run in dev, test and production — the situation Lab 06
-puts it in.
+One `dist` of the shell could then only ever talk to one set of remotes. The same artifact
+cannot be promoted through dev → test → production, which is exactly what Lab 06 requires of
+a container image.
 
-Planned approach: `shell/public/mfe-config.json` fetched before `bootstrap`, stored on
-`window.__MFE_CONFIG__`, and promise-based remotes that inject a `<script>`, wait for
-`onload`, read the container off `window`, and expose `get`/`init` to Webpack. Cases that
-must be handled: the same script added twice, a network error, a container missing from
-`window` after a successful load, and repeated shared-scope initialisation.
+Both `shell/webpack.dev.js` and `shell/webpack.prod.js` now declare `remotes: {}`. Webpack
+knows nothing about the remotes at build time.
 
-Acceptance: build the shell once, change only the JSON, point it at a different remote
-address, and confirm the unmodified build connects to it.
+### The three pieces
+
+**1. `shell/public/mfe-config.json`** — a plain static file, not a source module. It is
+copied into `dist` by `copy-webpack-plugin` and served next to `index.html`:
+
+```json
+{
+  "orders": "http://localhost:3001/remoteEntry.js",
+  "shipments": "http://localhost:3002/remoteEntry.js"
+}
+```
+
+The copy step is guarded so the shared factory does not break the two remotes, which have no
+`public` directory:
+
+```js
+...(fs.existsSync(path.resolve(appDirectory, 'public'))
+  ? [new CopyWebpackPlugin({ patterns: [{ from: path.resolve(appDirectory, 'public'), to: '.' }] })]
+  : []),
+```
+
+**2. `shell/src/index.ts`** — the config must be in memory before any application code runs,
+so the entry fetches it first and only then crosses the async boundary:
+
+```ts
+fetch('/mfe-config.json')
+  .then((res) => { if (!res.ok) throw new Error('Failed to load runtime MFE config'); return res.json(); })
+  .then((config) => {
+    window.MFE_CONFIG = config;
+    import('./bootstrap');
+  })
+  .catch((err) => { /* visible failure, not a blank page */ });
+```
+
+The dynamic `import('./bootstrap')` still performs its original job from 01.3 — giving the
+federation runtime time to initialise the shared scope — and now additionally guarantees the
+config is present before any remote is requested.
+
+**3. `shell/src/utils/dynamicRemote.ts`** — the loader, which returns the function shape
+`React.lazy` expects:
+
+```ts
+loadDynamicRemote(remoteName, moduleName): () => Promise<{ default: ComponentType }>
+```
+
+Five steps inside:
+
+| Step | What it does | Previously done by |
+| --- | --- | --- |
+| 1 | read the URL from `window.MFE_CONFIG` | baked into the bundle |
+| 2 | create a `<script>`, wait for `onload` | `webpack/container/reference/orders` |
+| 3 | read the container off `window[remoteName]` | Webpack |
+| 4 | `__webpack_init_sharing__('default')` then `container.init(__webpack_share_scopes__.default)` | `initExternal` |
+| 5 | `container.get(moduleName)` → factory → `factory()` | Webpack |
+
+Step 3 is why `ModuleFederationPlugin`'s `name` must be globally unique: the container
+registers itself as a global under exactly that name.
+
+Step 4 is the one that unlocked the Retry button. Under static remotes this handshake happens
+once inside a memoised `__webpack_require__.I`; here it is ordinary application code that can
+run again on every attempt.
+
+### Required cases
+
+| Case named in the assignment | Where |
+| --- | --- |
+| network error | `script.onerror` → `script.remove()`, drop from cache, reject |
+| container missing after load | explicit check of `window[remoteName]`, throws with a readable message |
+| repeated shared-scope initialisation | `init` wrapped in `try/catch`, logged rather than fatal |
+| the same script added twice | a module-level `Map<url, Promise>` de-duplicates concurrent requests |
+
+### Deviation from the assignment's wording
+
+The assignment describes *promise-based remotes*: hand Webpack a fake container through
+`remotes: { orders: "promise new Promise(...)" }` and let Webpack drive `get` and `init`.
+This implementation instead declares `remotes: {}` and calls `init`/`get` from application
+code, passing the result to `React.lazy`.
+
+Both satisfy the acceptance criteria — the URL is not baked into the bundle and one build
+works with different runtime configs. The reason for choosing this variant is concrete:
+with promise-based remotes Webpack still owns the module cache and the memoised
+`initPromises`, which are layers 2 and 4 of the Retry problem documented under
+[Error isolation](#error-isolation). Taking over the loading is what made the Retry button
+possible.
+
+### Acceptance test
+
+Performed against the production build with static servers:
+
+1. `shell/dist` built once.
+2. A second copy of `orders/dist` served on port **3005**.
+3. Only `shell/dist/mfe-config.json` edited — `3001` → `3005`.
+4. Page reloaded. **No rebuild.**
+
+Result: `remoteEntry.js` was requested from `localhost:3005`, no requests went to `3001`, and
+the Orders section worked normally. One build, different runtime configuration.
+
+Note the file that must be edited is the one in `dist`, not the source in `public` — editing
+the source would prove nothing without a rebuild, and the absence of a rebuild is the whole
+point.
 
 ---
 
 ## Network verification results
 
-> **Not recorded yet** — the measurement for task 01.8.
+Measured against the **production** build served by static servers, DevTools Network with
+*Disable cache* enabled. Procedure: load `/`, hard-reload, clear the log, navigate to
+`/orders`, record, and only then navigate to `/shipments`.
 
-Procedure: DevTools → Network, *Disable cache* on, reload `/`, navigate to `/orders`, record
-what loaded, and only then navigate to `/shipments`.
+| While on | Requests to `:3001` (orders) | Requests to `:3002` (shipments) |
+| --- | --- | --- |
+| `/` | none | none |
+| `/orders` | `remoteEntry.js` + 1 chunk | **none** |
+| then `/shipments` | unchanged | `remoteEntry.js` + 1 chunk |
 
-Expected on `/orders`: orders chunks loaded, shipments **component** chunks not loaded.
+Nothing belonging to `shipments` is fetched while the user is on `/orders`, and each remote
+costs exactly one manifest request plus one chunk when it is first needed.
 
-One caveat to record honestly rather than hide: with statically declared remotes the host
-initialises remote containers as part of shared-scope setup, so `remoteEntry.js` itself may
-be fetched earlier than the navigation. The requirement is that the *component code* of
-`shipments` is not downloaded while on `/orders`. A fully dynamic loader (task 01.12) can
-defer `remoteEntry.js` as well.
+Note that `remoteEntry.js` itself is deferred, not just the component chunk. With statically
+declared remotes the host initialises every container during shared-scope setup, so the
+manifests are typically fetched up front and only the component code is lazy. Because loading
+is driven by the runtime loader from task 01.12, a remote is untouched until its route is
+entered — the stronger of the two behaviours the assignment describes.
+
+Chunk loading also confirms `publicPath: 'auto'`: every remote asset is requested from the
+remote's own origin, never from the host on `:3000`.
+
+---
+
+## Dev/prod divergence found during acceptance
+
+Worth recording separately, because it only appeared in the production build and is the
+reason task 22 exists as its own acceptance step.
+
+**Symptom.** The dev server worked perfectly. The production `dist`, served statically, threw
+on every page:
+
+```text
+Uncaught (in promise) TypeError: (0 , d.jsxDEV) is not a function
+```
+
+**Cause.** Babel and Webpack disagreed about the build mode. The factory declared the JSX
+transform without stating a mode:
+
+```js
+['@babel/preset-react', { runtime: 'automatic' }]
+```
+
+`@babel/preset-react` then takes its `development` flag from the environment — `BABEL_ENV`,
+then `NODE_ENV`, defaulting to `"development"` when neither is set. Running
+`webpack --config webpack.prod.js` sets neither: `mode: 'production'` configures Webpack and
+the code inside the bundle, not the environment of the Node process Babel reads.
+
+So Babel emitted development JSX calls:
+
+```js
+var d = r(421);            // react/jsx-dev-runtime
+… (0, d.jsxDEV)("p", …)
+```
+
+while Webpack defined `NODE_ENV = "production"`, which makes React resolve that entry point to
+its production build — where the export exists but is deliberately empty:
+
+```js
+// react/cjs/react-jsx-dev-runtime.production.js
+exports.jsxDEV = void 0;
+```
+
+Half the build was development, half production.
+
+**Fix.** State the mode explicitly, from the same `mode` Webpack already receives:
+
+```js
+['@babel/preset-react', { runtime: 'automatic', development: !isProd }]
+```
+
+**Verification.** Before: `jsxDEV` referenced in 7 chunks across the three `dist` folders.
+After: zero, and all three builds emit `jsx` / `jsxs` from `react/jsx-runtime` instead.
+
+The lesson is the one the assignment states — a working dev server proves nothing about the
+built artifact, and this class of defect is only reachable by building and serving statically.
 
 ---
 
 ## Known limitations
 
-- Types are not shared between applications. `shell/src/remotes.d.ts` is written by hand and
-  nothing verifies it against the real remote — see the evidence above.
-- Remote URLs are still baked into the shell build (task 01.12).
-- No Error Boundary yet, so a dead remote currently takes down more than its own section
-  (task 01.9).
-- Production static serving has not been verified, only the dev server.
+- Types are not shared between applications. The remote contract is hand-written — now as the
+  return type of `loadDynamicRemote` — and nothing verifies it against the real remote.
 - `shared` fallbacks are duplicated in every `dist`. This is by design, but it means bundle
   size on disk is not a measure of whether sharing works.
 - Chunk IDs are unstable across builds and must not be referenced anywhere but in ad-hoc
   inspection.
+- The loader's handling of an already-present `<script>` tag resolves as soon as the tag is
+  found rather than waiting for its `load` event. The in-memory `Map` de-duplicates every
+  request this application actually makes, so the branch is effectively unreachable, but it
+  would be wrong if a tag were injected by something else.
+- Remote URLs are configurable at runtime, but the config is fetched from the host's own
+  origin with no schema validation and no fallback if a URL is malformed.
+- Task 01.13 (the same host on the Vite MF plugin) has not been attempted.
