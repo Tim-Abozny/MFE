@@ -16,6 +16,7 @@ module.exports = function createWebpackConfig({ appDirectory, port, mode, federa
 
   const pkg = require(path.resolve(appDirectory, 'package.json'));
   const dependencies = pkg.dependencies || {};
+  const publicPathValue = federationConfig.name === 'shell' ? '/' : 'auto';
 
   const commonConfig = {
     mode: mode,
@@ -24,7 +25,7 @@ module.exports = function createWebpackConfig({ appDirectory, port, mode, federa
       path: path.resolve(appDirectory, 'dist'),
       filename: 'bundle.js',
       clean: true,
-      publicPath: 'auto',
+      publicPath: publicPathValue,
       uniqueName: federationConfig.name,
     },
     resolve: {
@@ -50,7 +51,11 @@ module.exports = function createWebpackConfig({ appDirectory, port, mode, federa
       ],
     },
     plugins: [
-      new HtmlWebpackPlugin({}),
+      new HtmlWebpackPlugin({
+        template: path.resolve(__dirname, 'template.html'),
+        title: federationConfig.name,
+        excludeChunks: [federationConfig.name],
+      }),
       new ModuleFederationPlugin({
         ...federationConfig,
         shared: {
@@ -63,10 +68,15 @@ module.exports = function createWebpackConfig({ appDirectory, port, mode, federa
             singleton: true,
             requiredVersion: dependencies['react-dom'],
           },
-          
+
           'react-router-dom': {
             singleton: true,
             requiredVersion: dependencies['react-router-dom'],
+          },
+
+          'react-router': {
+            singleton: true,
+            requiredVersion: dependencies['react-router'],
           },
         },
       }),

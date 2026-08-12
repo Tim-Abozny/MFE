@@ -53,7 +53,7 @@ export default function ShipmentDetails() {
         <b>Estimated Delivery Date:</b> {shipment.estimatedDelivery}
       </p>
       <hr />
-      <Link to="/shipments" style={{ color: "#666666" }}>
+      <Link to=".." style={{ color: "#666666" }}>
         ← Back to List
       </Link>
     </div>

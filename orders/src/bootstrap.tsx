@@ -1,13 +1,16 @@
 import { createRoot } from "react-dom/client";
+import { BrowserRouter } from "react-router-dom";
 import OrdersApp from "./OrdersApp";
 
-const container =
-  document.getElementById("root") || document.createElement("div");
+const container = document.getElementById("root");
 
-if (!container.id) {
-  container.id = "root";
-  document.body.appendChild(container);
+if (!container) {
+  throw new Error("Root element #root was not found");
 }
 
 const root = createRoot(container);
-root.render(<OrdersApp />);
+root.render(
+  <BrowserRouter>
+    <OrdersApp />
+  </BrowserRouter>,
+);

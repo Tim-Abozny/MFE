@@ -49,7 +49,7 @@ export default function OrderDetails() {
         <span style={{ color: "green" }}>{order.status}</span>
       </p>
       <hr />
-      <Link to="/orders" style={{ color: "#666666" }}>
+      <Link to=".." style={{ color: "#666666" }}>
         ← Back to List
       </Link>
     </div>
