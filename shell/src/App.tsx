@@ -1,9 +1,8 @@
-import { Suspense, lazy } from "react";
+import { Suspense, lazy, useState, useMemo } from "react";
 import { BrowserRouter, Routes, Route, NavLink } from "react-router-dom";
 import { THEME, getWelcomeMessage } from "@mfe/ds";
-
-const OrdersApp = lazy(() => import("orders/OrdersApp"));
-const ShipmentsApp = lazy(() => import("shipments/ShipmentsApp"));
+import { RemoteErrorBoundary } from "./components/ErrorBoundary";
+import { loadDynamicRemote } from "./utils/dynamicRemote";
 
 const Home = () => (
   <div
@@ -23,6 +22,18 @@ const Home = () => (
 );
 
 const ShellLayout = () => {
+  const [ordersKey, setOrdersKey] = useState(0);
+  const [shipmentsKey, setShipmentsKey] = useState(0);
+
+  const OrdersApp = useMemo(
+    () => lazy(loadDynamicRemote("orders", "./OrdersApp")),
+    [ordersKey],
+  );
+  const ShipmentsApp = useMemo(
+    () => lazy(loadDynamicRemote("shipments", "./ShipmentsApp")),
+    [shipmentsKey],
+  );
+
   return (
     <div
       style={{
@@ -81,30 +92,42 @@ const ShellLayout = () => {
           <Route
             path="/orders/*"
             element={
-              <Suspense
-                fallback={
-                  <p style={{ color: "green", textAlign: "center" }}>
-                    Loading Orders Section…
-                  </p>
-                }
+              <RemoteErrorBoundary
+                sectionName="Orders"
+                key={`orders-${ordersKey}`}
+                onRetry={() => setOrdersKey((prev) => prev + 1)}
               >
-                <OrdersApp />
-              </Suspense>
+                <Suspense
+                  fallback={
+                    <p style={{ color: "green", textAlign: "center" }}>
+                      Loading Orders Section…
+                    </p>
+                  }
+                >
+                  <OrdersApp />
+                </Suspense>
+              </RemoteErrorBoundary>
             }
           />
 
           <Route
             path="/shipments/*"
             element={
-              <Suspense
-                fallback={
-                  <p style={{ color: "magenta", textAlign: "center" }}>
-                    Loading Shipments Section…
-                  </p>
-                }
+              <RemoteErrorBoundary
+                sectionName="Shipments"
+                key={`shipments-${shipmentsKey}`}
+                onRetry={() => setShipmentsKey((prev) => prev + 1)}
               >
-                <ShipmentsApp />
-              </Suspense>
+                <Suspense
+                  fallback={
+                    <p style={{ color: "magenta", textAlign: "center" }}>
+                      Loading Shipments Section…
+                    </p>
+                  }
+                >
+                  <ShipmentsApp />
+                </Suspense>
+              </RemoteErrorBoundary>
             }
           />
         </Routes>

@@ -2,6 +2,8 @@ const path = require('path');
 const HtmlWebpackPlugin = require('html-webpack-plugin');
 const { merge } = require('webpack-merge');
 const { ModuleFederationPlugin } = require('webpack').container;
+const fs = require('fs');
+const CopyWebpackPlugin = require('copy-webpack-plugin');
 
 /**
  * Единая фабрика конфигурации Webpack
@@ -42,7 +44,7 @@ module.exports = function createWebpackConfig({ appDirectory, port, mode, federa
               cwd: appDirectory, 
               presets: [
                 '@babel/preset-env',
-                ['@babel/preset-react', { 'runtime': 'automatic' }],
+                ['@babel/preset-react', { runtime: 'automatic', development: !isProd }],
                 '@babel/preset-typescript'
               ]
             },
@@ -80,6 +82,13 @@ module.exports = function createWebpackConfig({ appDirectory, port, mode, federa
           },
         },
       }),
+      ...(fs.existsSync(path.resolve(appDirectory, 'public'))
+        ? [
+            new CopyWebpackPlugin({
+              patterns: [{ from: path.resolve(appDirectory, 'public'), to: '.' }],
+            }),
+          ]
+        : []),
     ],
   };
 

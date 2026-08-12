@@ -6,6 +6,7 @@
         "concurrently": "^10.0.4"
     },
     "scripts": {
-        "dev": "concurrently --kill-others --prefix \"[{name}]\" --names \"shell,orders,shipments,api\" --prefix-colors \"blue,green,magenta,yellow\" \"pnpm --filter @mfe/shell start\" \"pnpm --filter @mfe/orders start\" \"pnpm --filter @mfe/shipments start\" \"pnpm --filter @mfe/api start\""
+        "dev": "concurrently --kill-others --prefix \"[{name}]\" --names \"shell,orders,shipments,api\" --prefix-colors \"blue,green,magenta,yellow\" \"pnpm --filter @mfe/shell start\" \"pnpm --filter @mfe/orders start\" \"pnpm --filter @mfe/shipments start\" \"pnpm --filter @mfe/api start\"",
+        "build": "pnpm --filter \"@mfe/*\" build"
     }
 }

@@ -1,13 +1,6 @@
-declare module "orders/OrdersApp" {
-  import type { ComponentType } from "react";
+declare const __webpack_init_sharing__: (scope: string) => Promise<void>;
+declare const __webpack_share_scopes__: { default: unknown };
 
-  const OrdersApp: ComponentType;
-  export default OrdersApp;
-}
-
-declare module "shipments/ShipmentsApp" {
-  import type { ComponentType } from "react";
-
-  const ShipmentsApp: ComponentType;
-  export default ShipmentsApp;
+interface Window {
+  MFE_CONFIG?: Record<string, string>;
 }

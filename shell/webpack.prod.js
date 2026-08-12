@@ -6,9 +6,6 @@ module.exports = createWebpackConfig({
   mode: 'production',
   federationConfig: {
     name: 'shell',
-    remotes: {
-      orders: 'orders@http://localhost:3001/remoteEntry.js',
-      shipments: 'shipments@http://localhost:3002/remoteEntry.js'
-    }
+    remotes: {}
   }
 });
